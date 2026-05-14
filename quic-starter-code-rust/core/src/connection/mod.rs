@@ -449,31 +449,33 @@ impl Connection {
         let space_id = packet.header.space();
         let payload_len = packet.payload.len();
 
-        let mut parser = FrameParser::new(packet.payload);
-        while let Some(frame) = parser.next()? {
+        let mut parser = FrameParser::new(packet.payload)?;
+        while let Some(frame) = parser.next().transpose()? {
             match frame {
+                Frame::Padding => {}
+                Frame::Ping => {}
+                Frame::ImmediateAck => {
+                    self.spaces[space_id]
+                        .pending_acks
+                        .set_immediate_ack_required();
+                }
                 Frame::Ack(ack) => {
                     self.on_ack_received(now, space_id, ack)?;
                 }
                 Frame::Stream(stream) => {
-                    let id = stream.id;
-                    let (new_bytes, closed) = self.streams.received(id, stream, payload_len)?;
-                    // new_bytes / closed used for flow control — store or ignore for now
+                    self.streams.received(stream, payload_len)?;
                 }
                 Frame::ResetStream(reset) => {
-                    self.streams
-                        .reset(reset.id, reset.error_code, reset.final_offset)?;
+                    self.streams.received_reset(reset)?;
                 }
                 Frame::StopSending(stop) => {
-                    self.streams.stopped(stop.id, stop.error_code)?;
+                    self.streams.received_stop_sending(stop)?;
                 }
                 Frame::Close(close) => {
                     self.kill(ConnectionError::from(close));
                     return Ok(());
                 }
-                Frame::Ping => {
-                    // ACK-eliciting; already handled by on_packet_authenticated
-                }
+                _ => {}
             }
         }
         Ok(())

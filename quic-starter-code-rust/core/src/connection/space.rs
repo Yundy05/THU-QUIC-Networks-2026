@@ -93,9 +93,22 @@ impl PacketSpace {
     /// Record one newly sent packet and update sent-packet tracking and
     /// ack-eliciting in-flight counters.
     pub(super) fn sent(&mut self, packet: SentPacket) -> u64 {
-        // TODO
-        let _ = packet;
-        unimplemented!("implement PacketSpace::sent");
+        // TODO -- ATTEMPTING DONE
+        let number = packet.number;
+        let size = u64::from(packet.size);
+
+        if packet.ack_eliciting {
+            self.largest_ack_eliciting_sent = number;
+            self.unacked_non_ack_eliciting_tail = 0;
+        } else if number > self.largest_ack_eliciting_sent {
+            self.unacked_non_ack_eliciting_tail += 1;
+        }
+
+        self.in_flight += size;
+        self.sent_packets.insert(number, packet);
+
+        0
+        // unimplemented!("implement PacketSpace::sent");
     }
 }
 

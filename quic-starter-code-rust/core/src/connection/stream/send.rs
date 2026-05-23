@@ -151,7 +151,7 @@ impl SendBuffer {
     /// Remove ACKed data from the send buffer and keep `unacked`/`acks`
     /// bookkeeping consistent.
     fn ack(&mut self, range: Range<u64>) {
-        // TODO
+        // TODO -- ATTEMPTING
         let _ = range;
         unimplemented!("implement SendBuffer::ack");
     }
@@ -212,7 +212,7 @@ impl SendBuffer {
     /// Return a contiguous slice for the requested offsets from buffered
     /// stream data.
     pub(super) fn get(&self, offsets: Range<u64>) -> &[u8] {
-        // TODO
+        // TODO -- ATTEMPTING
         let _ = offsets;
         unimplemented!("implement SendBuffer::get");
     }

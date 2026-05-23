@@ -571,9 +571,66 @@ impl Connection {
         now: Instant,
         packet: Packet,
     ) -> Result<(), TransportError> {
-        // TODO
-        let _ = (now, packet);
-        unimplemented!("implement process_early_payload");
+        // TODO -- ATTEMPTING DONE
+        let space_id = packet.header.space();
+
+        let mut parser = FrameParser::new(packet.payload)?;
+        while let Some(frame) = parser.next().transpose()? {
+            match frame {
+                Frame::Padding => {}
+                Frame::Ping => {}
+                Frame::Ack(ack) => {
+                    self.on_ack_received(now, space_id, ack)?;
+                }
+                Frame::Crypto(_crypto) => {
+                    // For this lab skeleton, we just record that handshake traffic
+                    // was observed in this space.
+                    self.spaces[space_id].hi = true;
+
+                    // Advance the highest active space we have reached.
+                    if space_id > self.highest_space {
+                        self.highest_space = space_id;
+                    }
+
+                    // If we have handshake-space crypto, we are no longer purely in
+                    // the Initial phase.
+                    if space_id == SpaceId::Handshake && self.state.is_handshake() {
+                        self.state = State::Established;
+                    }
+                }
+                Frame::Close(close) => {
+                    self.kill(ConnectionError::from(close));
+                    return Ok(());
+                }
+
+                // Stream/data/application frames are not valid in Initial/Handshake
+                // packet payloads for this lab.
+                Frame::Stream(_)
+                | Frame::ResetStream(_)
+                | Frame::StopSending(_)
+                | Frame::MaxData(_)
+                | Frame::MaxStreamData { .. }
+                | Frame::MaxStreams { .. }
+                | Frame::DataBlocked { .. }
+                | Frame::StreamDataBlocked { .. }
+                | Frame::StreamsBlocked { .. }
+                | Frame::NewConnectionId(_)
+                | Frame::RetireConnectionId { .. }
+                | Frame::PathChallenge(_)
+                | Frame::PathResponse(_)
+                | Frame::Datagram(_)
+                | Frame::ImmediateAck
+                | Frame::HandshakeDone
+                | Frame::NewToken(_) => {
+                    return Err(TransportError::PROTOCOL_VIOLATION(
+                        "illegal frame in Initial/Handshake packet",
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+        // unimplemented!("implement process_early_payload");
     }
 
     /// Process a 1-RTT packet payload.

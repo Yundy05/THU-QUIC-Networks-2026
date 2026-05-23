@@ -259,7 +259,7 @@ impl StreamsState {
         buf: &mut B,
         fair: bool,
     ) -> Vec<StreamMeta> {
-        // TODO
+        // TODO -- ATTEMPTING 
         let _ = (buf, fair);
         unimplemented!("implement StreamsState::write_stream_frames");
     }
@@ -293,7 +293,7 @@ impl StreamsState {
     /// Re-queue lost STREAM frame ranges for retransmission and ensure
     /// the stream is scheduled for future sending.
     pub(crate) fn retransmit(&mut self, frame: StreamMeta) {
-        // TODO
+        // TODO -- ATTEMPTING
         let _ = frame;
         unimplemented!("implement StreamsState::retransmit");
     }

@@ -354,17 +354,78 @@ impl Connection {
     /// Detect lost packets in the selected packet number space, queue retransmissions,
     /// and update congestion-control and timer state.
     fn detect_lost_packets(&mut self, now: Instant, space_id: SpaceId) {
-        let _ = (now, space_id);
-
-        //TODO:
+        //TODO: -- ATTEMPTING DONE
         // 1) Determine `loss_delay`, or how long should we wait for the acks before thinking
         // the packets seem to be lost after their send time.
         // 2) Collect the lost packets in each Packet Number Space.
         // 3) Retransmit the **Frames**, not the packets, by calling `retransmit` on streams, and
         //    remove the retransmitted packet from the in flight statistics of the path.
         // 4) You may need to update the `pending` field for each space.
+        let largest_acked = match self.spaces[space_id].largest_acked_packet {
+            Some(pn) => pn,
+            None => {
+                self.spaces[space_id].loss_time = None;
+                return;
+            }
+        };
 
-        unimplemented!("implement detect_lost_packets");
+        let loss_delay = self.path.rtt.conservative() * 9 / 8;
+        let lost_send_before = now
+            .checked_sub(loss_delay.max(TIMER_GRANULARITY))
+            .unwrap_or(now);
+
+        let mut lost_packets = Vec::new();
+        let mut next_loss_time = None;
+
+        {
+            let space = &self.spaces[space_id];
+
+            for (&pn, packet) in space.sent_packets.iter() {
+                if pn > largest_acked {
+                    break;
+                }
+
+                let lost = packet.time_sent <= lost_send_before;
+
+                if lost {
+                    lost_packets.push((pn, packet.clone()));
+                } else {
+                    let candidate = packet.time_sent + loss_delay.max(TIMER_GRANULARITY);
+                    next_loss_time = match next_loss_time {
+                        None => Some(candidate),
+                        Some(prev) => Some(prev.min(candidate)),
+                    };
+                }
+            }
+        }
+
+        self.spaces[space_id].loss_time = next_loss_time;
+
+        if lost_packets.is_empty() {
+            return;
+        }
+
+        for (pn, packet) in lost_packets {
+            let removed_from_path = self.path.remove_in_flight(pn, &packet);
+
+            if removed_from_path && packet.ack_eliciting {
+                self.path
+                    .congestion
+                    .on_congestion_event(now, packet.time_sent);
+            }
+
+            for frame in packet.stream_frames.iter().cloned() {
+                self.streams.retransmit(frame);
+            }
+
+            if let Some(retransmits) = packet.retransmits.get() {
+                self.spaces[space_id].pending |= retransmits.clone();
+            }
+
+            let _ = self.spaces[space_id].take(pn);
+        }
+
+        self.set_loss_detection_timer(now);
     }
 
     /// Process an ACK frame, confirm sent packets, and update RTT, congestion,
@@ -375,12 +436,10 @@ impl Connection {
         space_id: SpaceId,
         ack: Ack,
     ) -> Result<(), TransportError> {
-        // TODO -- ATTEMPTING DONE 
+        // TODO -- ATTEMPTING DONE
         // Reject ACKs that acknowledge packets we have not sent yet.
         if ack.largest >= self.spaces[space_id].next_packet_number {
-            return Err(TransportError::PROTOCOL_VIOLATION(
-                "ACK for unsent packet",
-            ));
+            return Err(TransportError::PROTOCOL_VIOLATION("ACK for unsent packet"));
         }
 
         // Reject ACKs that go backwards relative to the largest packet number
@@ -435,30 +494,29 @@ impl Connection {
             }
         }
 
+        if !newly_acked_any {
+            return Ok(());
+        }
 
-    if !newly_acked_any {
-        return Ok(());
-    }
+        self.spaces[space_id].largest_acked_packet = Some(
+            self.spaces[space_id]
+                .largest_acked_packet
+                .map_or(ack.largest, |prev| prev.max(ack.largest)),
+        );
+        self.spaces[space_id].largest_acked_packet_sent = now;
 
-    self.spaces[space_id].largest_acked_packet = Some(
-        self.spaces[space_id]
-            .largest_acked_packet
-            .map_or(ack.largest, |prev| prev.max(ack.largest)),
-    );
-    self.spaces[space_id].largest_acked_packet_sent = now;
+        // RTT is updated from the largest newly acknowledged packet.
+        if let Some(packet) = largest_newly_acked {
+            let ack_delay_micros = ack.delay << ACK_DELAY_EXP;
+            let ack_delay = Duration::from_micros(ack_delay_micros);
+            let rtt = now.saturating_duration_since(packet.time_sent);
+            self.path.rtt.update(ack_delay, rtt);
+        }
 
-    // RTT is updated from the largest newly acknowledged packet.
-    if let Some(packet) = largest_newly_acked {
-        let ack_delay_micros = ack.delay << ACK_DELAY_EXP;
-        let ack_delay = Duration::from_micros(ack_delay_micros);
-        let rtt = now.saturating_duration_since(packet.time_sent);
-        self.path.rtt.update(ack_delay, rtt);
-    }
+        self.detect_lost_packets(now, space_id);
+        self.set_loss_detection_timer(now);
 
-    self.detect_lost_packets(now, space_id);
-    self.set_loss_detection_timer(now);
-
-    Ok(())
+        Ok(())
         // unimplemented!("implement on_ack_received");
     }
 
@@ -787,9 +845,13 @@ impl Connection {
     /// Handle loss-detection timeout by running time-threshold loss processing
     /// and resetting related timers.
     fn on_loss_detection_timeout(&mut self, now: Instant) {
-        // TODO
-        let _ = now;
-        unimplemented!("implement on_loss_detection_timeout");
+        // TODO -- ATTEMPTING DONE
+        if let Some((_, space_id)) = self.loss_time_and_space() {
+            self.detect_lost_packets(now, space_id);
+        }
+
+        self.set_loss_detection_timer(now);
+        // unimplemented!("implement on_loss_detection_timeout");
     }
 
     /// Dispatch timeout handling by timer type (Close, LossDetection).

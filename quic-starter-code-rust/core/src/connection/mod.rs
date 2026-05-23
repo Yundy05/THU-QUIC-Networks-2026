@@ -375,9 +375,91 @@ impl Connection {
         space_id: SpaceId,
         ack: Ack,
     ) -> Result<(), TransportError> {
-        // TODO
-        let _ = (now, space_id, ack);
-        unimplemented!("implement on_ack_received");
+        // TODO -- ATTEMPTING DONE 
+        // Reject ACKs that acknowledge packets we have not sent yet.
+        if ack.largest >= self.spaces[space_id].next_packet_number {
+            return Err(TransportError::PROTOCOL_VIOLATION(
+                "ACK for unsent packet",
+            ));
+        }
+
+        // Reject ACKs that go backwards relative to the largest packet number
+        // already acknowledged in this packet number space.
+        if let Some(prev_largest) = self.spaces[space_id].largest_acked_packet {
+            if ack.largest < prev_largest {
+                return Err(TransportError::PROTOCOL_VIOLATION(
+                    "ACK regressed largest acknowledged packet",
+                ));
+            }
+        }
+
+        let mut largest_newly_acked: Option<SentPacket> = None;
+        let mut newly_acked_any = false;
+
+        for range in &ack {
+            for pn in range {
+                let Some(packet) = self.spaces[space_id].take(pn) else {
+                    continue;
+                };
+
+                newly_acked_any = true;
+
+                let is_larger = match &largest_newly_acked {
+                    None => true,
+                    Some(largest) => packet.number > largest.number,
+                };
+
+                if is_larger {
+                    largest_newly_acked = Some(packet.clone());
+                }
+
+                if let Some(largest_acked_by_packet) = packet.largest_acked {
+                    self.spaces[space_id]
+                        .pending_acks
+                        .subtract_below(largest_acked_by_packet + 1);
+                }
+
+                for frame in packet.stream_frames.iter().cloned() {
+                    self.streams.received_ack_of(frame);
+                }
+
+                let removed_from_path = self.path.remove_in_flight(packet.number, &packet);
+
+                if removed_from_path && packet.ack_eliciting {
+                    self.path.congestion.on_ack(
+                        packet.time_sent,
+                        u64::from(packet.size),
+                        self.app_limited,
+                    );
+                }
+            }
+        }
+
+
+    if !newly_acked_any {
+        return Ok(());
+    }
+
+    self.spaces[space_id].largest_acked_packet = Some(
+        self.spaces[space_id]
+            .largest_acked_packet
+            .map_or(ack.largest, |prev| prev.max(ack.largest)),
+    );
+    self.spaces[space_id].largest_acked_packet_sent = now;
+
+    // RTT is updated from the largest newly acknowledged packet.
+    if let Some(packet) = largest_newly_acked {
+        let ack_delay_micros = ack.delay << ACK_DELAY_EXP;
+        let ack_delay = Duration::from_micros(ack_delay_micros);
+        let rtt = now.saturating_duration_since(packet.time_sent);
+        self.path.rtt.update(ack_delay, rtt);
+    }
+
+    self.detect_lost_packets(now, space_id);
+    self.set_loss_detection_timer(now);
+
+    Ok(())
+        // unimplemented!("implement on_ack_received");
     }
 
     /// Parse and process an incoming QUIC packet and dispatch its frames to
@@ -445,7 +527,7 @@ impl Connection {
         number: u64,
         packet: Packet,
     ) -> Result<(), TransportError> {
-        // TODO -- ATTEMPTING
+        // TODO -- ATTEMPTING DONE
         let space_id = packet.header.space();
         let payload_len = packet.payload.len();
 

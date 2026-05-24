@@ -151,9 +151,39 @@ impl SendBuffer {
     /// Remove ACKed data from the send buffer and keep `unacked`/`acks`
     /// bookkeeping consistent.
     fn ack(&mut self, range: Range<u64>) {
-        // TODO -- ATTEMPTING
-        let _ = range;
-        unimplemented!("implement SendBuffer::ack");
+        // TODO -- ATTEMPTING DONE
+        self.acks.insert(range);
+
+        // base = absolute offset of the first byte still buffered
+        let base = self.offset - self.unacked_len as u64;
+
+        // Drain segments from the front that are fully covered by acks.
+        // A segment [seg_start, seg_end) is fully covered if both endpoints
+        // are contained — use contains(x) which checks if x is in the set.
+        let mut freed = 0u64;
+        loop {
+            let seg = match self.unacked_segments.front() {
+                Some(s) => s,
+                None => break,
+            };
+            let seg_start = base + freed;
+            let seg_end = seg_start + seg.len() as u64;
+
+            // seg_end - 1 is the last byte of this segment.
+            // If both seg_start and (seg_end - 1) are acked, the whole segment is covered.
+            if self.acks.contains(seg_start) && self.acks.contains(seg_end - 1) {
+                freed += seg.len() as u64;
+                self.unacked_segments.pop_front();
+            } else {
+                break;
+            }
+        }
+        self.unacked_len -= freed as usize;
+        // Clean up the freed prefix from acks to prevent unbounded growth
+        if freed > 0 {
+            self.acks.remove(base..base + freed);
+        }
+        // unimplemented!("implement SendBuffer::ack");
     }
 
     /// Compute the next range to transmit on this stream and update state to
@@ -212,9 +242,26 @@ impl SendBuffer {
     /// Return a contiguous slice for the requested offsets from buffered
     /// stream data.
     pub(super) fn get(&self, offsets: Range<u64>) -> &[u8] {
-        // TODO -- ATTEMPTING
-        let _ = offsets;
-        unimplemented!("implement SendBuffer::get");
+        // TODO -- ATTEMPTING DONE
+        // base is the absolute offset of the first byte in unacked_segments
+        let base = self.offset - self.unacked_len as u64;
+        let start = (offsets.start - base) as usize;
+        let end = (offsets.end - base) as usize;
+
+        // Walk segments to find which one contains `start`
+        let mut pos = 0usize;
+        for seg in &self.unacked_segments {
+            let seg_end = pos + seg.len();
+            if start < seg_end {
+                // The requested range begins in this segment
+                let seg_start = start - pos;
+                let seg_len = (end - start).min(seg.len() - seg_start);
+                return &seg[seg_start..seg_start + seg_len];
+            }
+            pos = seg_end;
+        }
+        &[]
+        // unimplemented!("implement SendBuffer::get");
     }
 
     /// Queue a range of sent but unacknowledged data to be retransmitted

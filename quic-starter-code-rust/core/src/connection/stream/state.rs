@@ -259,9 +259,89 @@ impl StreamsState {
         buf: &mut B,
         fair: bool,
     ) -> Vec<StreamMeta> {
-        // TODO -- ATTEMPTING 
-        let _ = (buf, fair);
-        unimplemented!("implement StreamsState::write_stream_frames");
+        // TODO -- ATTEMPTING DONE
+        let mut metas = Vec::new();
+
+        loop {
+            // Need at minimum Stream::SIZE_BOUND bytes for a frame header + some data
+            if buf.remaining_mut() < Stream::SIZE_BOUND {
+                break;
+            }
+
+            // Pop the highest-priority stream
+            let stream_pending = match self.pending.pop() {
+                Some(s) => s,
+                None => break,
+            };
+            let id = stream_pending.id;
+
+            let stream = match self.send.get_mut(&id) {
+                Some(s) => s,
+                None => continue, // stream removed, skip
+            };
+
+            // Skip reset streams — they produce no STREAM frames
+            if stream.is_reset() {
+                continue;
+            }
+
+            // Nothing to send on this stream right now
+            if !stream.is_pending() {
+                continue;
+            }
+
+            // Ask the send buffer for the next range to transmit.
+            // poll_transmit needs at least SIZE_BOUND (1+8+8 header) bytes of budget.
+            let max_len = buf.remaining_mut();
+            let (range, encode_length) = stream.pending.poll_transmit(max_len);
+
+            // Check whether we're also sending a FIN on this stream
+            let fin = stream.fin_pending && range.end == stream.pending.offset();
+            if fin {
+                stream.fin_pending = false;
+            }
+
+            if range.is_empty() && !fin {
+                // Nothing was produced — re-enqueue and stop to avoid a spin loop
+                let priority = stream.priority;
+                self.pending.push_pending(id, priority);
+                break;
+            }
+
+            // Build the metadata and encode the header into buf
+            let meta = StreamMeta {
+                id,
+                offsets: range.clone(),
+                fin,
+            };
+            meta.encode(encode_length, buf);
+
+            // Write the actual data bytes
+            if !range.is_empty() {
+                // get() may return a subset of the range (noncontiguous buffer),
+                // so use only as many bytes as it gives us back
+                let data = stream.pending.get(range.clone());
+                buf.put_slice(data);
+            }
+
+            metas.push(meta);
+
+            // Re-enqueue if the stream still has data pending
+            let still_pending = stream.is_pending();
+            if still_pending {
+                let priority = stream.priority;
+                if fair {
+                    // Fair mode: re-enqueue at the back (round-robin via push_pending)
+                    self.pending.push_pending(id, priority);
+                } else {
+                    // Unfair mode: keep this stream at the front via reinsert_pending
+                    self.pending.reinsert_pending(id, priority);
+                }
+            }
+        }
+
+        metas
+        // unimplemented!("implement StreamsState::write_stream_frames");
     }
 
     /// Process ACK metadata for one STREAM frame and advance send-stream
@@ -293,9 +373,29 @@ impl StreamsState {
     /// Re-queue lost STREAM frame ranges for retransmission and ensure
     /// the stream is scheduled for future sending.
     pub(crate) fn retransmit(&mut self, frame: StreamMeta) {
-        // TODO -- ATTEMPTING
-        let _ = frame;
-        unimplemented!("implement StreamsState::retransmit");
+        // TODO -- ATTEMPTING DONE
+        let stream = match self.send.get_mut(&frame.id) {
+            Some(s) => s,
+            None => return,
+        };
+
+        if stream.is_reset() {
+            return;
+        }
+
+        // Before marking retransmit: check if already scheduled
+        let was_pending = stream.is_pending();
+
+        // Mark the lost byte range for retransmission in the send buffer
+        stream.pending.retransmit(frame.offsets);
+
+        // Only push to the priority queue if the stream wasn't already there,
+        // mirroring the pattern used in SendStream::write and SendStream::finish
+        if !was_pending {
+            let priority = stream.priority;
+            self.pending.push_pending(frame.id, priority);
+        }
+        // unimplemented!("implement StreamsState::retransmit");
     }
 }
 

@@ -9,9 +9,7 @@ use tokio::{
 };
 use tracing::warn;
 
-use super::{
-    space::{PacketSpace, SentPacket},
-};
+use super::space::{PacketSpace, SentPacket};
 use crate::INITIAL_MTU;
 
 const MIN_RTT: Duration = Duration::from_millis(333);
@@ -151,9 +149,40 @@ impl RttEstimator {
 
     /// Update latest/smoothed/min RTT and variance from a new RTT sample and ACK delay.
     pub(super) fn update(&mut self, ack_delay: Duration, rtt: Duration) {
-        // TODO -- ATTEMPTING 
-        let _ = (ack_delay, rtt);
-        unimplemented!("implement RttEstimator::update");
+        // TODO -- ATTEMPTING DONE 
+        self.latest = rtt;
+
+        // Update min RTT (always ignores ack_delay per RFC 9002 §5.2)
+        self.min = self.min.min(rtt);
+
+        // Adjust for ack delay, but never go below min_rtt
+        let adjusted_rtt = if rtt > self.min + ack_delay {
+            rtt - ack_delay
+        } else {
+            rtt
+        };
+
+        match self.smoothed {
+            None => {
+                // First RTT sample (RFC 9002 §5.3 first measurement)
+                self.smoothed = Some(adjusted_rtt);
+                self.var = adjusted_rtt / 2;
+            }
+            Some(smoothed) => {
+                // EWMA update (RFC 9002 §5.3)
+                // rttvar = 3/4 * rttvar + 1/4 * |smoothed_rtt - adjusted_rtt|
+                let diff = if smoothed > adjusted_rtt {
+                    smoothed - adjusted_rtt
+                } else {
+                    adjusted_rtt - smoothed
+                };
+                self.var = (self.var * 3 + diff) / 4;
+
+                // smoothed_rtt = 7/8 * smoothed_rtt + 1/8 * adjusted_rtt
+                self.smoothed = Some((smoothed * 7 + adjusted_rtt) / 8);
+            }
+        }
+        // unimplemented!("implement RttEstimator::update");
     }
 }
 

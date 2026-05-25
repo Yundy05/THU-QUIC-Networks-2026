@@ -149,7 +149,7 @@ impl RttEstimator {
 
     /// Update latest/smoothed/min RTT and variance from a new RTT sample and ACK delay.
     pub(super) fn update(&mut self, ack_delay: Duration, rtt: Duration) {
-        // TODO -- ATTEMPTING DONE 
+        // TODO -- ATTEMPTING DONE
         self.latest = rtt;
 
         // Update min RTT (always ignores ack_delay per RFC 9002 §5.2)
@@ -248,16 +248,52 @@ impl NewReno {
     /// Increase congestion window on ACK according to slow-start and
     /// congestion-avoidance rules.
     pub(super) fn on_ack(&mut self, sent: Instant, bytes: u64, app_limited: bool) {
-        // TODO
-        let _ = (sent, bytes, app_limited);
-        unimplemented!("implement NewReno::on_ack");
+        // TODO -- ATTEMTPING DONE
+        // Don't grow the window if the app isn't filling it anyway
+        if app_limited {
+            return;
+        }
+
+        // Packets sent before (or during) recovery don't count toward window growth;
+        // we only exit recovery once a packet sent *after* it is acknowledged
+        if sent <= self.recovery_start_time {
+            return;
+        }
+
+        if self.window < self.ssthresh {
+            // Slow start: additive increase by bytes acknowledged
+            self.window += bytes;
+        } else {
+            // Congestion avoidance: increase by one MSS per RTT (Reno AIMD)
+            // Approximated as: window += MSS * bytes_acked / window
+            self.bytes_acked += bytes;
+            if self.bytes_acked >= self.window {
+                self.bytes_acked -= self.window;
+                self.window += INITIAL_MTU as u64;
+            }
+        }
+        // unimplemented!("implement NewReno::on_ack");
     }
 
     /// Apply congestion response on loss and update recovery and threshold state.
     pub(super) fn on_congestion_event(&mut self, now: Instant, sent: Instant) {
-        // TODO
-        let _ = (now, sent);
-        unimplemented!("implement NewReno::on_congestion_event");
+        // TODO -- ATTEMPTING DONE
+        // Only react once per round-trip — ignore loss for packets sent
+        // while we're already in recovery (RFC 9002 §7.3.2)
+        if sent <= self.recovery_start_time {
+            return;
+        }
+
+        // Enter recovery: mark the start so on_ack knows to ignore older packets
+        self.recovery_start_time = now;
+
+        // Multiplicative decrease: halve the window, floor at 2 * MSS
+        self.ssthresh = (self.window / 2).max(2 * INITIAL_MTU as u64);
+        self.window = self.ssthresh;
+
+        // Reset CA byte accumulator so the next CA phase starts cleanly
+        self.bytes_acked = 0;
+        // unimplemented!("implement NewReno::on_congestion_event");
     }
 
     pub(super) fn window(&self) -> u64 {

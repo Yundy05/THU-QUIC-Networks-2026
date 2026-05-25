@@ -39,6 +39,8 @@ pub struct PacketSpace {
     pub(super) in_flight: u64,
 }
 
+const MAX_ACK_BLOCKS: usize = 64;
+
 impl PacketSpace {
     pub(super) fn new(now: Instant) -> Self {
         Self {
@@ -539,7 +541,7 @@ impl PendingAcks {
     /// frames arrive
     /// Reset ACK-related counters after ACK frames are sent.
     pub(super) fn acks_sent(&mut self) {
-        // TODO -- ATTEMPTING
+        // TODO -- ATTEMPTING DONE
         self.immediate_ack_required = false;
         self.ack_eliciting_since_last_ack_sent = 0;
         self.non_ack_eliciting_since_last_ack_sent = 0;
@@ -551,18 +553,27 @@ impl PendingAcks {
     /// Insert one packet that needs to be acknowledged
     /// Insert one packet number into pending ACK ranges and refresh largest-packet metadata.
     pub(super) fn insert_one(&mut self, packet: u64, now: Instant) {
-        // TODO -- ATTEMPTING
-        let _ = (packet, now);
-        unimplemented!("implement PendingAcks::insert_one");
+        // TODO -- ATTEMPTING DONE
+        self.ranges.insert_one(packet);
+
+        if self.largest_packet.is_none_or(|(pn, _)| packet > pn) {
+            self.largest_packet = Some((packet, now));
+        }
+
+        if self.ranges.len() > MAX_ACK_BLOCKS {
+            self.ranges.pop_min();
+        }
+
+        // unimplemented!("implement PendingAcks::insert_one");
     }
 
     /// Remove ACKs of packets numbered at or below `max` from the set of
     /// pending ACKs
     /// Drop stale pending ACK ranges at or below the specified packet number.
     pub(super) fn subtract_below(&mut self, max: u64) {
-        // TODO -- ATTEMPTING
-        let _ = max;
-        unimplemented!("implement PendingAcks::subtract_below");
+        // TODO -- ATTEMPTING DONE
+        self.ranges.remove(0..(max + 1));
+        // unimplemented!("implement PendingAcks::subtract_below");
     }
 
     /// Returns the set of currently pending ACK ranges
@@ -570,7 +581,22 @@ impl PendingAcks {
         &self.ranges
     }
 
+    
+
     // TODO: There may be some corner-cases to consider:
     // e.g., Queue an ACK if a significant number of non-ACK-eliciting packets have
     // not yet been acknowledged. This helps the peer perform timely loss detection.
+
+    /// Queue an ACK if a significant number of non-ACK-eliciting packets have
+    /// not yet been acknowledged.
+    ///
+    /// Should be called immediately before a non-probing packet is composed,
+    /// when we've already committed to sending a packet regardless.
+    pub(super) fn maybe_ack_non_eliciting(&mut self) {
+        const LAZY_ACK_THRESHOLD: u64 = 10;
+        if self.non_ack_eliciting_since_last_ack_sent > LAZY_ACK_THRESHOLD {
+            self.immediate_ack_required = true;
+        }
 }
+
+

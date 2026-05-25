@@ -346,9 +346,28 @@ impl Connection {
             return;
         }
 
-        // TODO: Correctly handle this.
+        // TODO -- ATTEMPTING
+        // Correctly handle this.
         // 1) Are there any ACK-eliciting packets still inflight in this path?
         // 2) If PTO is implemented, remember to
+        // Arm a PTO timer if there are ACK-eliciting packets in flight.
+        let has_in_flight = SpaceId::VARIANTS
+            .iter()
+            .any(|&id| self.spaces[id].in_flight > 0);
+
+        if has_in_flight {
+            let pto = self.path.rtt.conservative() * 3 + TIMER_GRANULARITY;
+            let earliest_sent = SpaceId::VARIANTS
+                .iter()
+                .filter_map(|&id| self.spaces[id].sent_packets.values().next())
+                .map(|p| p.time_sent)
+                .min();
+            if let Some(sent) = earliest_sent {
+                self.timers.set(Timer::LossDetection, sent + pto);
+                return;
+            }
+        }
+
         self.timers.stop(Timer::LossDetection);
     }
 

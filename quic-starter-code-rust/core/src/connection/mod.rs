@@ -318,17 +318,32 @@ impl Connection {
             self.discard_space(now, SpaceId::Initial);
         }
         let space = &mut self.spaces[space_id];
-        let ack_eliciting = true; // treat all received packets as ack-eliciting conservatively
-        let arm_timer =
-            space
-                .pending_acks
-                .packet_received(now, number, ack_eliciting, &space.dedup);
+        let arm_timer = space
+            .pending_acks
+            .packet_received(now, number, true, &space.dedup);
+        info!(
+            "pkt_auth space={:?} pn={} can_send_ack={} arm_timer={}",
+            space_id,
+            number,
+            space.pending_acks.can_send(),
+            arm_timer
+        );
         if number >= space.rx_packet {
             space.rx_packet = number;
         }
-        if arm_timer {
-            self.timers
-                .set(Timer::MaxAckDelay, now + Duration::from_millis(25));
+
+        // For Initial/Handshake: ACK immediately, no delayed timer
+        // For Data: arm the MaxAckDelay timer if packet_received says to
+        if space_id == SpaceId::Data {
+            if arm_timer {
+                self.timers
+                    .set(Timer::MaxAckDelay, now + Duration::from_millis(25));
+            }
+        } else {
+            // No delayed ACK in Initial/Handshake — require immediate ACK
+            self.spaces[space_id]
+                .pending_acks
+                .set_immediate_ack_required();
         }
     }
 
@@ -601,6 +616,7 @@ impl Connection {
     ) -> Result<(), TransportError> {
         // TODO -- ATTEMPTING DONE
         let space_id = packet.header.space();
+        info!("processing frame in space={:?}", space_id);
 
         let mut parser = FrameParser::new(packet.payload)?;
         while let Some(frame) = parser.next().transpose()? {
@@ -675,6 +691,7 @@ impl Connection {
         // TODO -- ATTEMPTING DONE
         let space_id = packet.header.space();
         let payload_len = packet.payload.len();
+        info!("processing frame in space={:?}", space_id);
 
         let mut parser = FrameParser::new(packet.payload)?;
         while let Some(frame) = parser.next().transpose()? {
@@ -778,6 +795,10 @@ impl Connection {
         for &space_id in SpaceId::VARIANTS {
             // Is there data or a close message to send in this space?
             let can_send = self.space_can_send(space_id);
+            info!(
+                "poll_transmit space={:?} can_send={:?} congestion_blocked={}",
+                space_id, can_send, congestion_blocked
+            );
             if can_send.is_empty() && !(close && space_id == self.highest_space) {
                 continue;
             }

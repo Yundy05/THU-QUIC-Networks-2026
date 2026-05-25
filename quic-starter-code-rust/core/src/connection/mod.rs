@@ -318,9 +318,17 @@ impl Connection {
             self.discard_space(now, SpaceId::Initial);
         }
         let space = &mut self.spaces[space_id];
-        space.pending_acks.insert_one(number, now);
+        let ack_eliciting = true; // treat all received packets as ack-eliciting conservatively
+        let arm_timer =
+            space
+                .pending_acks
+                .packet_received(now, number, ack_eliciting, &space.dedup);
         if number >= space.rx_packet {
             space.rx_packet = number;
+        }
+        if arm_timer {
+            self.timers
+                .set(Timer::MaxAckDelay, now + Duration::from_millis(25));
         }
     }
 

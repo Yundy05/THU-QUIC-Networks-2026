@@ -300,9 +300,31 @@ impl Dedup {
     /// Return the smallest missing packet number in the interval, or `None`
     /// when the interval is complete.
     fn smallest_missing_in_interval(&self, lower_bound: u64, upper_bound: u64) -> Option<u64> {
-        // TODO
-        let _ = (lower_bound, upper_bound);
-        unimplemented!("implement Dedup::smallest_missing_in_interval");
+        // TODO -- ATTEMPTING DONE
+        // Scan from lower_bound up to upper_bound (exclusive) looking for the
+        // first packet number whose bit is NOT set in the window
+        for pn in lower_bound..upper_bound {
+            let is_received = if pn >= self.next {
+                // Ahead of the window — never seen
+                false
+            } else if self.highest() == pn {
+                // The highest received packet is always considered received
+                true
+            } else {
+                let bit = self.highest() - pn - 1;
+                if bit >= WINDOW_SIZE - 1 {
+                    // Outside the window to the left — assumed received (lost track)
+                    true
+                } else {
+                    self.window & (1 << bit) != 0
+                }
+            };
+
+            if !is_received {
+                return Some(pn);
+            }
+        }
+        None // unimplemented!("implement Dedup::smallest_missing_in_interval");
     }
 
     /// Returns true if there are any missing packets between the provided
@@ -312,9 +334,10 @@ impl Dedup {
     /// function
     /// Return whether any packet number is missing in the interval.
     fn missing_in_interval(&self, lower_bound: u64, upper_bound: u64) -> bool {
-        // TODO -- ATTEMPTING
-        let _ = (lower_bound, upper_bound);
-        unimplemented!("implement Dedup::missing_in_interval");
+        // TODO -- ATTEMPTING DONE
+        self.smallest_missing_in_interval(lower_bound, upper_bound)
+            .is_some()
+        // unimplemented!("implement Dedup::missing_in_interval");
     }
 }
 
@@ -423,9 +446,48 @@ impl PendingAcks {
         ack_eliciting: bool,
         dedup: &Dedup,
     ) -> bool {
-        // TODO -- ATTEMPTING 
-        let _ = (now, packet_number, ack_eliciting, dedup);
-        unimplemented!("implement PendingAcks::packet_received");
+        // TODO -- ATTEMPTING DONE
+        // Track the previous largest ack-eliciting packet before inserting,
+        // so is_out_of_order can compare against it
+        let prev_largest_ack_eliciting = self.largest_ack_eliciting_packet.unwrap_or(0);
+
+        // Always record this packet in the pending ACK ranges
+        self.insert_one(packet_number, now);
+
+        if ack_eliciting {
+            self.ack_eliciting_since_last_ack_sent += 1;
+
+            // Update largest ack-eliciting packet seen
+            if self
+                .largest_ack_eliciting_packet
+                .map_or(true, |largest| packet_number > largest)
+            {
+                self.largest_ack_eliciting_packet = Some(packet_number);
+            }
+
+            // Arm delayed ACK timer on first ack-eliciting packet since last ACK sent
+            if self.earliest_ack_eliciting_since_last_ack_sent.is_none() {
+                self.earliest_ack_eliciting_since_last_ack_sent = Some(now);
+            }
+        } else {
+            self.non_ack_eliciting_since_last_ack_sent += 1;
+        }
+
+        // Immediately require an ACK if:
+        // 1. We've accumulated more than the threshold of ack-eliciting packets, OR
+        // 2. This packet is out-of-order (gap detected — peer needs to know ASAP)
+        if self.ack_eliciting_since_last_ack_sent > self.ack_eliciting_threshold
+            || (ack_eliciting
+                && self.is_out_of_order(packet_number, prev_largest_ack_eliciting, dedup))
+        {
+            self.immediate_ack_required = true;
+            return false; // No need to arm timer — we're sending immediately
+        }
+
+        // Arm the delayed ACK timer if this was ack-eliciting and we have
+        // no immediate requirement to send
+        ack_eliciting && !self.immediate_ack_required
+        // unimplemented!("implement PendingAcks::packet_received");
     }
 
     /// Determine whether a packet is out of order, and whether that requires
@@ -436,9 +498,39 @@ impl PendingAcks {
         prev_largest_ack_eliciting: u64,
         dedup: &Dedup,
     ) -> bool {
-        // TODO -- ATTEMPTING
-        let _ = (packet_number, prev_largest_ack_eliciting, dedup);
-        unimplemented!("implement PendingAcks::is_out_of_order");
+        // TODO -- ATTEMPTING DONE
+        // A packet is out-of-order if it arrived below the current largest
+        // ack-eliciting packet — i.e. it filled a gap rather than extending
+        // the frontier
+        if packet_number < prev_largest_ack_eliciting {
+            return true;
+        }
+
+        // Even if this packet extended the frontier, there may be gaps below it.
+        // reordering_threshold controls how aggressively we respond:
+        //   0 → never trigger on gaps
+        //   1 → RFC 9000 behaviour: trigger if any gap exists below this packet
+        //  >1 → ACK frequency draft: trigger if the gap is larger than threshold
+        match self.reordering_threshold {
+            0 => false,
+            1 => {
+                // Immediate ACK if there is ANY missing packet below packet_number
+                // in the range we've been tracking (lower bound = largest_acked + 1
+                // to skip already-confirmed ranges, or 0 if nothing acked yet)
+                let lower = self.largest_acked.map_or(0, |a| a + 1);
+                dedup.missing_in_interval(lower, packet_number)
+            }
+            threshold => {
+                // ACK frequency draft: only trigger if the smallest gap is more
+                // than `threshold` packets below the current frontier
+                let lower = self.largest_acked.map_or(0, |a| a + 1);
+                match dedup.smallest_missing_in_interval(lower, packet_number) {
+                    Some(missing) => packet_number.saturating_sub(missing) >= threshold,
+                    None => false,
+                }
+            }
+        }
+        // unimplemented!("implement PendingAcks::is_out_of_order");
     }
 
     /// Should be called whenever ACKs have been sent
@@ -447,8 +539,13 @@ impl PendingAcks {
     /// frames arrive
     /// Reset ACK-related counters after ACK frames are sent.
     pub(super) fn acks_sent(&mut self) {
-        // TODO -- ATTEMPTING 
-        unimplemented!("implement PendingAcks::acks_sent");
+        // TODO -- ATTEMPTING
+        self.immediate_ack_required = false;
+        self.ack_eliciting_since_last_ack_sent = 0;
+        self.non_ack_eliciting_since_last_ack_sent = 0;
+        self.earliest_ack_eliciting_since_last_ack_sent = None;
+        self.largest_acked = self.largest_ack_eliciting_packet;
+        // unimplemented!("implement PendingAcks::acks_sent");
     }
 
     /// Insert one packet that needs to be acknowledged
@@ -463,7 +560,7 @@ impl PendingAcks {
     /// pending ACKs
     /// Drop stale pending ACK ranges at or below the specified packet number.
     pub(super) fn subtract_below(&mut self, max: u64) {
-        // TODO -- ATTEMPTING 
+        // TODO -- ATTEMPTING
         let _ = max;
         unimplemented!("implement PendingAcks::subtract_below");
     }

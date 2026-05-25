@@ -125,7 +125,8 @@ async fn run_connection(
         // Send scheduled packets as soon as possible
         while let Some(post_send) = connection.path.send_one(&mut connection.spaces).await {
             if post_send.ack_eliciting {
-                // TODO: You may need to handle idle timeout here.
+                // TODO -- ATTEMPTING
+                // You may need to handle idle timeout here.
                 connection.set_loss_detection_timer(now);
             }
         }
@@ -596,6 +597,8 @@ impl Connection {
                     // the Initial phase.
                     if space_id == SpaceId::Handshake && self.state.is_handshake() {
                         self.state = State::Established;
+                        // Notify application that the connection is ready.
+                        self.events_tx.send(Event::Connected).ok();
                     }
                 }
                 Frame::Close(close) => {
@@ -721,7 +724,8 @@ impl Connection {
     /// Return whether this should be called again
     /// Poll all sendable spaces, compose packets, and enqueue datagrams for transmission.
     fn poll_transmit(&mut self, now: Instant) -> bool {
-        // TODO: Things to take into consideration:
+        // TODO -- ATTEMPTING DONE
+        // Things to take into consideration:
         // 1) Whether the stream is App-limited?
         // 2) Whether the stream is congestion-blocked?
         // Schedule to send a packet, rather than actually sending one here.
@@ -738,6 +742,11 @@ impl Connection {
             }
             _ => false,
         };
+
+        // Check congestion window once before iterating spaces.
+        let congestion_blocked = self.path.in_flight.bytes >= self.path.congestion.window();
+
+        let mut sent_any = false;
 
         for &space_id in SpaceId::VARIANTS {
             // Is there data or a close message to send in this space?
@@ -762,7 +771,17 @@ impl Connection {
                 ack_eliciting |= self.streams.can_send_stream_data();
             }
 
-            // TODO: proceed only if we are not blocked by congestion control here.
+            // TODO -- ATTEMPTING DONE
+            // proceed only if we are not blocked by congestion control here.
+
+            // Don't send ack-eliciting packets if congestion-blocked.
+            // Pure ACK-only packets (ack_eliciting=false) are always allowed through
+            // since they don't consume congestion window.
+            if ack_eliciting && congestion_blocked {
+                // We couldn't send due to congestion, not app behaviour — not app-limited.
+                self.app_limited = false;
+                continue;
+            }
 
             let mut buf = vec![0u8; INITIAL_MTU];
             let mut out = &mut buf[..];
@@ -802,11 +821,22 @@ impl Connection {
                 stream_frames,
             } = if close {
                 debug!("sending CONNECTION_CLOSE");
-                // TODO: Encode ACKs before the ConnectionClose message, to give the receiver a better
+                // TODO -- ATTEMPTING DONE
+                // Encode ACKs before the ConnectionClose message, to give the receiver a better
                 // approximate on what data has been processed. This is especially important
                 // with ack delay, since the peer might not have gotten any other ACK for the
                 // data earlier on.
 
+                // Encode ACKs before the ConnectionClose so the peer gets up-to-date
+                // acknowledgement info, especially important with ACK delay active.
+                if !self.spaces[space_id].pending_acks.ranges().is_empty() {
+                    Self::populate_acks(
+                        now,
+                        &mut SentFrames::default(),
+                        &mut self.spaces[space_id],
+                        &mut out,
+                    );
+                }
                 // Don't send another close packet
                 self.pending_close = false;
 
@@ -839,11 +869,29 @@ impl Connection {
             // Schedule to send
             let scheduled_packet = ScheduledPacket { packet, meta_info };
             self.path.sending_queue.push_back(scheduled_packet);
+            sent_any = true;
+        }
+
+        // If nothing was queued this round, stop spinning.
+        if !sent_any {
+            return false;
         }
 
         // Whether this function should be called again
-        // TODO: consider whether the stream is congestion_blocked, and whether it is app_limited
-        true
+        // TODO --ATTEMPTING DONE
+        // consider whether the stream is congestion_blocked, and whether it is app_limited
+        // Ask to be called again only if there is still unsent work remaining.
+
+        let more_to_send = SpaceId::VARIANTS
+            .iter()
+            .any(|&id| !self.space_can_send(id).is_empty());
+
+        // App-limited: sender has data capacity left but nothing to send —
+        // i.e. the bottleneck is the application, not the network.
+        self.app_limited =
+            !more_to_send && self.path.in_flight.bytes < self.path.congestion.window();
+
+        more_to_send
     }
 
     /// Write pending ACKs into a buffer
@@ -878,21 +926,44 @@ impl Connection {
     ) -> SentFrames {
         // TODO -- ATTEMPTING DONE
 
-        let mut sent = SentFrames {
-            retransmits: ThinRetransmits::default(),
-            largest_acked: None,
-            stream_frames: Vec::new(),
-        };
+        let mut sent = SentFrames::default();
 
-        let space = &mut self.spaces[space_id];
-
-        if !space.pending_acks.ranges().is_empty() {
-            Self::populate_acks(now, &mut sent, space, out);
+        // 1. ACK frames first
+        {
+            let space = &mut self.spaces[space_id];
+            if !space.pending_acks.ranges().is_empty() {
+                Self::populate_acks(now, &mut sent, space, out);
+            }
         }
 
+        // 2. Hello / Crypto frame (drives handshake progress)
+        {
+            let space = &mut self.spaces[space_id];
+            if space.pending.hello {
+                space.pending.hello = false;
+                space.hi = true;
+                out.put_u8(0x06); // CRYPTO frame type
+                out.put_u8(0x00); // offset = 0
+                out.put_u8(0x01); // length = 1
+                out.put_u8(0x00); // dummy crypto payload
+                sent.retransmits.get_or_create().hello = true;
+            }
+            if space_id == SpaceId::Data && space.ping_pending {
+                space.ping_pending = false;
+                out.put_u8(0x01); // PING frame type
+            }
+        }
+
+        // 3. RESET_STREAM / STOP_SENDING control frames
         if space_id == SpaceId::Data {
-            // Encode a PING frame here if we have one
-            space.ping_pending = false;
+            let pending = &mut self.spaces[space_id].pending;
+            self.streams
+                .write_control_frames(out, pending, &mut sent.retransmits);
+        }
+
+        // 4. STREAM data frames
+        if space_id == SpaceId::Data {
+            sent.stream_frames = self.streams.write_stream_frames(out, true);
         }
 
         sent
@@ -905,8 +976,14 @@ impl Connection {
         // TODO -- ATTEMPTING DONE
         if let Some((_, space_id)) = self.loss_time_and_space() {
             self.detect_lost_packets(now, space_id);
+        } else {
+            // PTO: force retransmission in all spaces that have in-flight packets
+            for &space_id in SpaceId::VARIANTS {
+                if self.spaces[space_id].in_flight > 0 {
+                    self.detect_lost_packets(now, space_id);
+                }
+            }
         }
-
         self.set_loss_detection_timer(now);
         // unimplemented!("implement on_loss_detection_timeout");
     }

@@ -581,8 +581,6 @@ impl PendingAcks {
         &self.ranges
     }
 
-    
-
     // TODO: There may be some corner-cases to consider:
     // e.g., Queue an ACK if a significant number of non-ACK-eliciting packets have
     // not yet been acknowledged. This helps the peer perform timely loss detection.
@@ -597,6 +595,5 @@ impl PendingAcks {
         if self.non_ack_eliciting_since_last_ack_sent > LAZY_ACK_THRESHOLD {
             self.immediate_ack_required = true;
         }
+    }
 }
-
-

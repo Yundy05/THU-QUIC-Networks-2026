@@ -17,3 +17,6 @@ Run stream echo server and client:
 ./target/release/server --file-lock ./xxx.lock   0.0.0.0:7722 stream-echo
 ./target/release/client --file-lock ./xxx.lock 127.0.0.1:7722 stream-echo
 ```
+
+Rebuild before each update 
+cargo build --release

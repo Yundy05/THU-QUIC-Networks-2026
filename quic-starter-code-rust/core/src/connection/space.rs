@@ -556,14 +556,13 @@ impl PendingAcks {
         // TODO -- ATTEMPTING DONE
         self.ranges.insert_one(packet);
 
-        if self.largest_packet.is_none_or(|(pn, _)| packet > pn) {
+        if self.largest_packet.map_or(true, |(pn, _)| packet > pn) {
             self.largest_packet = Some((packet, now));
         }
 
         if self.ranges.len() > MAX_ACK_BLOCKS {
             self.ranges.pop_min();
         }
-
         // unimplemented!("implement PendingAcks::insert_one");
     }
 

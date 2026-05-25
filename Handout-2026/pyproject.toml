@@ -1,0 +1,12 @@
+[project]
+name = "quic-expr-docs"
+version = "0.1.0"
+description = "Hand out for quic expr"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "zensical>=0.0.24",
+]

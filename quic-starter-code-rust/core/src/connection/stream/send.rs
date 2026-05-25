@@ -203,14 +203,40 @@ impl SendBuffer {
         debug_assert!(max_len >= 8 + 8);
         let mut encode_length = false;
 
-        if let Some(_range) = self.retransmits.pop_min() {
+        if let Some(range) = self.retransmits.pop_min() {
             // Retransmit sent data
 
             // When the offset is known, we know how many bytes are required to encode it.
             // Offset 0 requires no space
             //
-            // TODO: Retransmit sent data.
-            unimplemented!("Retransmit sent data")
+            // TODO: -- ATTEMPTING DONE
+            // Retransmit sent data.
+            // Subtract varint cost of encoding the offset (offset 0 needs no bytes)
+            if range.start != 0 {
+                max_len -= varint_len(range.start);
+            }
+
+            // If the retransmit range fits within max_len, we must encode the
+            // length so the receiver knows where this frame ends (another frame
+            // may follow in the same packet)
+            let data_len = range.end - range.start;
+            if data_len < max_len as u64 {
+                encode_length = true;
+                max_len -= 8; // reserve space for the varint length field
+            }
+
+            // Clamp the range to what actually fits
+            let end = range.end.min(range.start + max_len as u64);
+            let result = range.start..end;
+
+            // If we couldn't send the whole range, push the remainder back
+            if end < range.end {
+                self.retransmits.insert(end..range.end);
+            }
+
+            return (result, encode_length);
+
+            // unimplemented!("Retransmit sent data")
         }
 
         // Transmit new data

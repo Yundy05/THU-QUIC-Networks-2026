@@ -83,9 +83,11 @@ impl PacketSpace {
     /// Remove one sent packet by number, update in-flight accounting, and
     /// return its transmission metadata.
     pub(super) fn take(&mut self, number: u64) -> Option<SentPacket> {
-        // TODO
-        let _ = number;
-        unimplemented!("implement PacketSpace::take");
+        // TODO -- ATTEMPTING DONE
+        let packet = self.sent_packets.remove(&number)?;
+        self.in_flight -= u64::from(packet.size);
+        Some(packet)
+        // unimplemented!("implement PacketSpace::take");
     }
 
     /// Returns the number of bytes to *remove* from the connection's in-flight

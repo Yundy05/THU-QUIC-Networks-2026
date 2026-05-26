@@ -620,7 +620,21 @@ impl Connection {
         info!("processing frame in space={:?}", space_id);
 
         let mut parser = FrameParser::new(packet.payload)?;
+
         while let Some(frame) = parser.next().transpose()? {
+            let frame_name = match &frame {
+                Frame::Padding => "Padding",
+                Frame::Ping => "Ping",
+                Frame::Ack(_) => "Ack",
+                Frame::Crypto(_) => "Crypto",
+                Frame::Close(_) => "Close",
+                _ => "Other",
+            };
+
+            info!(
+                "early frame side={:?} space={:?} frame={}",
+                self.side, space_id, frame_name
+            );
             match frame {
                 Frame::Padding => {}
                 Frame::Ping => {}
@@ -630,18 +644,32 @@ impl Connection {
                 Frame::Crypto(_crypto) => {
                     // For this lab skeleton, we just record that handshake traffic
                     // was observed in this space.
-                    self.spaces[space_id].hi = true;
+                    let space = &mut self.spaces[space_id];
+                    let first_time = !space.hi;
 
-                    // Advance the highest active space we have reached.
+                    space.hi = true;
+
+                    if first_time {
+                        space.pending.hello = true;
+                    }
+
+                    info!(
+                        "CRYPTO_SET side={:?} space={:?} first_time={} pending_hello={} pending_empty={}",
+                        self.side,
+                        space_id,
+                        first_time,
+                        space.pending.hello,
+                        space.pending.is_empty()
+                    );
+
                     if space_id > self.highest_space {
                         self.highest_space = space_id;
                     }
 
-                    // If we have handshake-space crypto, we are no longer purely in
-                    // the Initial phase.
-                    if space_id == SpaceId::Handshake && self.state.is_handshake() {
+                    if self.state.is_handshake()
+                        && (space_id == SpaceId::Initial || space_id == SpaceId::Handshake)
+                    {
                         self.state = State::Established;
-                        // Notify application that the connection is ready.
                         self.events_tx.send(Event::Connected).ok();
                     }
                 }
@@ -796,10 +824,12 @@ impl Connection {
         for &space_id in SpaceId::VARIANTS {
             // Is there data or a close message to send in this space?
             let can_send = self.space_can_send(space_id);
-            info!(
-                "poll_transmit space={:?} can_send={:?} congestion_blocked={}",
-                space_id, can_send, congestion_blocked
-            );
+
+            // info!(
+            //     "poll_transmit space={:?} can_send={:?} congestion_blocked={}",
+            //     space_id, can_send, congestion_blocked
+            // );
+
             if can_send.is_empty() && !(close && space_id == self.highest_space) {
                 continue;
             }

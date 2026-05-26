@@ -86,12 +86,13 @@ impl StreamsState {
         })?;
 
         tracing::trace!(
-            "Received on stream{:?}, [{:?},{:?}, fin={:?})",
+            "Received on stream {:?}, [{:?},{:?}, fin={:?})",
             id,
             frame.offset,
             frame.offset + frame.data.len() as u64,
             frame.fin
         );
+
         if frame.fin {
             tracing::info!(
                 "FIN received on stream {} at offset {}",
@@ -100,22 +101,50 @@ impl StreamsState {
             );
         }
 
-        let rs = self.recv.entry(id).or_default();
+        let frame_fin = frame.fin;
+
+        let rs = match self.recv.entry(id) {
+            Entry::Occupied(entry) => entry.into_mut(),
+
+            Entry::Vacant(entry) => {
+                // If this is a stream we opened locally, then recv state should
+                // already exist from open(). If it is vacant now, it was likely
+                // already closed/disposed, so drop late retransmits.
+                if id.initiator() == self.side {
+                    trace!("dropping late frame for removed local stream");
+                    return Ok(());
+                }
+
+                // For peer-created streams, allow creation only from the beginning.
+                if frame.offset > 0 || frame.fin {
+                    trace!("dropping late/non-initial frame for unknown stream");
+                    return Ok(());
+                }
+
+                entry.insert(Default::default())
+            }
+        };
 
         if !rs.is_receiving() {
             trace!("dropping frame for finished stream");
             return Ok(());
         }
 
-        let (_, closed) = rs.ingest(frame, payload_len)?;
+        let was_fin_unknown = rs.final_offset_unknown();
+
+        let (new_bytes, closed) = rs.ingest(frame, payload_len)?;
 
         if !rs.stopped {
-            self.send_event(StreamEvent::Readable(id));
+            // Only wake the app if this STREAM frame actually added new readable
+            // bytes, or if this is the first time we learned about FIN.
+            if new_bytes > 0 || (frame_fin && was_fin_unknown) {
+                self.send_event(StreamEvent::Readable(id));
+            }
             return Ok(());
         }
 
         if closed {
-            self.recv.remove(&id).unwrap();
+            self.recv.remove(&id);
         }
 
         Ok(())

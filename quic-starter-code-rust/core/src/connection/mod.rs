@@ -321,13 +321,13 @@ impl Connection {
         let arm_timer = space
             .pending_acks
             .packet_received(now, number, true, &space.dedup);
-        info!(
-            "pkt_auth space={:?} pn={} can_send_ack={} arm_timer={}",
-            space_id,
-            number,
-            space.pending_acks.can_send(),
-            arm_timer
-        );
+        // info!(
+        //     "pkt_auth space={:?} pn={} can_send_ack={} arm_timer={}",
+        //     space_id,
+        //     number,
+        //     space.pending_acks.can_send(),
+        //     arm_timer
+        // );
         if number >= space.rx_packet {
             space.rx_packet = number;
         }
@@ -617,7 +617,7 @@ impl Connection {
     ) -> Result<(), TransportError> {
         // TODO -- ATTEMPTING DONE
         let space_id = packet.header.space();
-        info!("processing frame in space={:?}", space_id);
+        // info!("processing frame in space={:?}", space_id);
 
         let mut parser = FrameParser::new(packet.payload)?;
 
@@ -631,10 +631,10 @@ impl Connection {
                 _ => "Other",
             };
 
-            info!(
-                "early frame side={:?} space={:?} frame={}",
-                self.side, space_id, frame_name
-            );
+            // info!(
+            //     "early frame side={:?} space={:?} frame={}",
+            //     self.side, space_id, frame_name
+            // );
             match frame {
                 Frame::Padding => {}
                 Frame::Ping => {}
@@ -653,14 +653,14 @@ impl Connection {
                         space.pending.hello = true;
                     }
 
-                    info!(
-                        "CRYPTO_SET side={:?} space={:?} first_time={} pending_hello={} pending_empty={}",
-                        self.side,
-                        space_id,
-                        first_time,
-                        space.pending.hello,
-                        space.pending.is_empty()
-                    );
+                    // info!(
+                    //     "CRYPTO_SET side={:?} space={:?} first_time={} pending_hello={} pending_empty={}",
+                    //     self.side,
+                    //     space_id,
+                    //     first_time,
+                    //     space.pending.hello,
+                    //     space.pending.is_empty()
+                    // );
 
                     if space_id > self.highest_space {
                         self.highest_space = space_id;
@@ -720,7 +720,7 @@ impl Connection {
         // TODO -- ATTEMPTING DONE
         let space_id = packet.header.space();
         let payload_len = packet.payload.len();
-        info!("processing frame in space={:?}", space_id);
+        // info!("processing frame in space={:?}", space_id);
 
         let mut parser = FrameParser::new(packet.payload)?;
         while let Some(frame) = parser.next().transpose()? {

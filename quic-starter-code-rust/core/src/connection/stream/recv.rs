@@ -220,7 +220,7 @@ impl Assembler {
         }
     }
 
-    fn insert(&mut self, offset: u64, bytes: Bytes, allocation_size: usize) {
+    fn insert(&mut self, mut offset: u64, mut bytes: Bytes, allocation_size: usize) {
         debug_assert!(
             bytes.len() <= allocation_size,
             "allocation_size less than bytes.len(): {:?} < {:?}",
@@ -228,13 +228,46 @@ impl Assembler {
             bytes.len()
         );
 
-        // TODO: make this able to handle ordered data.
+        // TODO -- ATTEMPTING: make this able to handle ordered data.
         self.end = self.end.max(offset + bytes.len() as u64);
+
         if bytes.is_empty() {
             return;
         }
+
+        // Drop data that the application has already consumed.
+        let frame_end = offset + bytes.len() as u64;
+        if frame_end <= self.bytes_read {
+            return;
+        }
+
+        // Trim already-read prefix.
+        if offset < self.bytes_read {
+            let duplicate = (self.bytes_read - offset) as usize;
+            bytes.advance(duplicate);
+            offset = self.bytes_read;
+        }
+
+        if bytes.is_empty() {
+            return;
+        }
+
+        // Ordered-mode assembler: only accept data contiguous with the buffered tail.
+        // If a retransmission overlaps the tail, trim the duplicate prefix.
         if let Some(last) = self.data.back() {
             let last_offset_end = last.offset + last.bytes.len() as u64;
+
+            if offset < last_offset_end {
+                let duplicate = (last_offset_end - offset) as usize;
+
+                if duplicate >= bytes.len() {
+                    return;
+                }
+
+                bytes.advance(duplicate);
+                offset = last_offset_end;
+            }
+
             if last_offset_end != offset {
                 unimplemented!("Receive unordered data");
             }

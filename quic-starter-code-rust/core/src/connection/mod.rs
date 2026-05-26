@@ -575,12 +575,13 @@ impl Connection {
 
         let space = packet.header.space();
 
-        if let Some(pn) = number {
-            if self.spaces[packet.header.space()].dedup.insert(pn) {
-                debug!("discarding possible duplicate packet");
-                return Ok(());
-            }
-        }
+        //DUPLICATING PACKET ERROR
+        // if let Some(pn) = number {
+        //     if self.spaces[packet.header.space()].dedup.insert(pn) {
+        //         debug!("discarding possible duplicate packet");
+        //         return Ok(());
+        //     }
+        // }
 
         // Route by packet space / packet type
         match space {

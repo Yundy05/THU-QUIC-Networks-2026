@@ -184,7 +184,8 @@ impl Assembler {
             return Err(IllegalOrderedRead);
         } else if !ordered && self.state.is_ordered() {
             // Enter unordered mode
-            // TODO (optional): Support Unordered mode of reading.
+            // TODO -- ATTEMPTING
+            //(optional): Support Unordered mode of reading.
             unimplemented!("Unordered mode of recv stream");
         }
         Ok(())
@@ -194,6 +195,12 @@ impl Assembler {
     fn read(&mut self, max_length: usize, ordered: bool) -> Option<Chunk> {
         if !ordered {
             unimplemented!("Unordered read is not supported");
+        }
+
+        // Ordered reads may only release the contiguous prefix.
+        let front_offset = self.data.front()?.offset;
+        if front_offset != self.bytes_read {
+            return None;
         }
 
         let chunk = self.data.front_mut()?;
@@ -244,6 +251,11 @@ impl Assembler {
         // Trim already-read prefix.
         if offset < self.bytes_read {
             let duplicate = (self.bytes_read - offset) as usize;
+
+            if duplicate >= bytes.len() {
+                return;
+            }
+
             bytes.advance(duplicate);
             offset = self.bytes_read;
         }
@@ -252,30 +264,63 @@ impl Assembler {
             return;
         }
 
-        // Ordered-mode assembler: only accept data contiguous with the buffered tail.
-        // If a retransmission overlaps the tail, trim the duplicate prefix.
-        if let Some(last) = self.data.back() {
-            let last_offset_end = last.offset + last.bytes.len() as u64;
+        // Keep self.data sorted by offset, with no overlaps.
+        let mut insert_at = self.data.len();
+        for (i, buf) in self.data.iter().enumerate() {
+            let buf_end = buf.offset + buf.bytes.len() as u64;
+            if buf_end > offset {
+                insert_at = i;
+                break;
+            }
+        }
 
-            if offset < last_offset_end {
-                let duplicate = (last_offset_end - offset) as usize;
+        // Trim overlap with previous segment.
+        if insert_at > 0 {
+            let prev = &self.data[insert_at - 1];
+            let prev_end = prev.offset + prev.bytes.len() as u64;
+
+            if prev_end > offset {
+                let duplicate = (prev_end - offset) as usize;
 
                 if duplicate >= bytes.len() {
                     return;
                 }
 
                 bytes.advance(duplicate);
-                offset = last_offset_end;
-            }
-
-            if last_offset_end != offset {
-                unimplemented!("Receive unordered data");
+                offset = prev_end;
             }
         }
+
+        // Drop fully covered following segments, or trim suffix overlap.
+        let new_end = offset + bytes.len() as u64;
+        while insert_at < self.data.len() {
+            let buf = &self.data[insert_at];
+            let buf_end = buf.offset + buf.bytes.len() as u64;
+
+            if buf.offset >= new_end {
+                break;
+            }
+
+            if buf_end <= new_end {
+                let removed = self.data.remove(insert_at).unwrap();
+                self.buffered -= removed.bytes.len();
+                self.allocated -= removed.allocation_size;
+                continue;
+            }
+
+            let keep = (buf.offset - offset) as usize;
+            bytes.truncate(keep);
+            break;
+        }
+
+        if bytes.is_empty() {
+            return;
+        }
+
         let buffer = Buffer::new(offset, bytes, allocation_size);
         self.buffered += buffer.bytes.len();
         self.allocated += buffer.allocation_size;
-        self.data.push_back(buffer);
+        self.data.insert(insert_at, buffer);
     }
 
     /// Number of bytes consumed by the application

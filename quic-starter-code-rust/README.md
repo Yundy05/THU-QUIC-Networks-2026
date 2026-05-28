@@ -1,6 +1,7 @@
 # How to run
 
 Run file transfer server and client:
+dd if=/dev/urandom of=original.bin bs=1M count=10
 ```bash
 ./target/release/server --file-lock ./xxx.lock   0.0.0.0:7722 file-transfer --path ./original.bin
 ./target/release/client --file-lock ./xxx.lock 127.0.0.1:7722 file-transfer --path ./output.bin
@@ -18,5 +19,5 @@ Run stream echo server and client:
 ./target/release/client --file-lock ./xxx.lock 127.0.0.1:7722 stream-echo
 ```
 
-Rebuild before each update 
+Rebuild before each update  
 cargo build --release

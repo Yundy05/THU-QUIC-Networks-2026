@@ -1,4 +1,6 @@
 # How to run
+Debugging
+RUST_BACKTRACE = 1
 
 Run file transfer server and client:
 dd if=/dev/urandom of=original.bin bs=1M count=10

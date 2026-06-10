@@ -142,7 +142,7 @@ async fn run_connection(
             Some((now, data)) = data_rx.recv() => {
                 connection.handle_data(now, data);
             },
-            _ = tokio::time::sleep(Duration::from_millis(1000))=>{}
+            _ = tokio::time::sleep(Duration::from_millis(5))=>{}
         }
     }
 }

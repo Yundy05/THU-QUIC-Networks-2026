@@ -329,14 +329,6 @@ async fn main() {
         }
     };
 
-    let mut endpoint = Endpoint::new(handler, "0.0.0.0:0").await;
-    endpoint.connect(args.address);
-
-    let endpoint_task = tokio::spawn(async move {
-        endpoint.run(true).await;
-    });
-
-    // Wait for the server file marker (for sync only, not to block network)
     if let Some(file_lock) = args.file_lock {
         match AsyncFileWaiter::new(file_lock) {
             Ok(mut waiter) => {
@@ -351,6 +343,9 @@ async fn main() {
             }
         }
     }
-    endpoint_task.await.ok();
+
+    let mut endpoint = Endpoint::new(handler, "0.0.0.0:0").await;
+    endpoint.connect(args.address);
+    endpoint.run(true).await;
     tracing::info!("Gracefully shutting down for client");
 }

@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use bytes::Bytes;
 use clap::Parser;
-use mzquic::*;
 use mzquic::file_notice_macos::FileMarker;
+use mzquic::*;
 use mzquic_core::{
     Connection, Endpoint, Event, ReadError, StreamEvent, TransportHandler, TransportHandlerFactory,
 };
@@ -230,13 +230,20 @@ async fn main() {
     };
 
     let endpoint = Endpoint::new(handler, args.address).await;
+
+    // Spawn endpoint first so it's listening before we signal ready
+    let run_handle = tokio::spawn(async move {
+        endpoint.run(false).await;
+    });
+
+    // NOW create the marker — server is already listening
     let _marker = args.file_lock.map(|file_lock| {
         FileMarker::new(file_lock)
             .map_err(|error| tracing::error!(?error, "Failed to create file lock"))
     });
 
     tokio::select! {
-        _ = endpoint.run(false) => {}
+        _ = run_handle => {}
         _ = tokio::signal::ctrl_c() => {
             tracing::warn!("received Ctrl+C");
         }
